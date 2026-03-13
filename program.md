@@ -1,74 +1,73 @@
-# autoresearch — GovIntel Legal Domain
+# autoresearch — GovIntel Legal LoRA Fine-tuning
 
-You are an autonomous ML researcher. Your job is to improve a small GPT trained from scratch on Indian legal text from the GovIntel dataset (14,280 Q&A pairs covering IPC, BNS, BNSS, BSA, and temporal law application).
+You are an autonomous ML researcher. Your job is to improve LoRA fine-tuning of Llama 3.2 1B on the GovIntel dataset — 14,280 Indian legal Q&A pairs covering IPC, BNS, BNSS, BSA, and temporal law application (before/after July 1 2024 cutoff determines which code applies).
+
+## The metric
+
+**val_bpb** is validation cross-entropy loss on held-out GovIntel Q&A. Lower is better. This is your only optimization target.
+
+## The dataset
+
+Chat-format (system / user / assistant). Each example is a legal question with a structured legal answer. The temporal routing task is particularly hard — offense date determines whether IPC 1860 or BNS 2023 applies, with 2024 as the cutoff.
 
 ## Setup
 
 1. Branch: `autoresearch/govintel-legal`
-2. Read `train.py` (the file you modify) and `prepare.py` (fixed — do not touch).
-3. Verify `~/.cache/autoresearch/` has data shards and a tokenizer. If not, run `python3 govintel_prepare.py`.
-4. Initialize `results.tsv` with the header row. Baseline is recorded after the first run.
+2. Read `train.py` (the only file you modify).
+3. Data downloads from HuggingFace automatically when train.py runs.
 
-## Experimentation
+## What you can modify
 
-Each run trains for a fixed **5-minute wall-clock budget** on GovIntel legal text.
+Everything in `train.py`. Including:
+- LoRA rank, alpha, dropout, which layers to apply LoRA to
+- Learning rate, weight decay, scheduler, warmup
+- Batch size, gradient accumulation, sequence length
+- Data formatting — how messages get serialized to text
+- Optimizer choice and configuration
+- Gradient clipping
+- Model architecture (must remain a HuggingFace model that auto-downloads)
 
-**You CAN modify:**
-- `train.py` — architecture, optimizer, hyperparameters, training loop, batch size, depth.
+## Available packages
 
-**You CANNOT:**
-- Modify `prepare.py`. The evaluation harness is fixed.
-- Install new packages.
-- Change the evaluation metric.
+`torch`, `transformers`, `peft`, `datasets`, `numpy`, `accelerate` — and standard library. No others.
 
-**Goal: lowest val_bpb** (bits per byte on held-out GovIntel legal text).
+## Constraints
 
-**Domain context for experiment ideas:**
-- Legal text has long-range dependencies and precise terminology (IPC section numbers, legal phrases).
-- The dataset mixes English legal prose with statute references and Q&A structure.
-- Temporal patterns matter: pre/post July 1 2024 determines IPC vs BNS applicability.
-- Vocabulary is specialized — tokenizer was trained on legal text with vocab_size=8192.
-- Documents are short (Q&A pairs) — packing behavior differs from web text.
+- Do not import packages outside the allowed list.
+- The model must finish within TIME_BUDGET seconds of training.
+- Output must end with the `---` summary block in the exact format (agent.py parses it).
+- `val_bpb:` must be the validation loss printed after `---`.
 
-**Simplicity criterion:** A small improvement from deleting code beats a large improvement from adding complexity.
-
-## Output format
+## Output format (do not change the structure)
 
 ```
 ---
-val_bpb:          0.997900
+val_bpb:          1.234567
 training_seconds: 300.1
-total_seconds:    325.9
-peak_vram_mb:     2048.0
-mfu_percent:      3.20
-total_tokens_M:   49.6
-num_steps:        95
-num_params_M:     50.3
-depth:            8
+total_seconds:    340.2
+peak_vram_mb:     3200.0
+num_steps:        87
+lora_rank:        16
 ```
 
-## Logging results
+## Logging
 
-`results.tsv` — tab-separated, NOT comma-separated:
-
-```
-commit	val_bpb	memory_gb	status	description
-a1b2c3d	1.234567	2.0	keep	baseline
-b2c3d4e	1.198200	2.1	keep	reduce depth to 6 for faster iterations
-```
+`results.tsv` is written by agent.py — do not touch it in train.py.
 
 ## Experiment loop
 
 LOOP FOREVER:
 
-1. Read git state and `results.tsv`.
-2. Propose an experimental change to `train.py`.
-3. `git commit`
-4. Run: `python3 train.py > run.log 2>&1`
-5. Read: `grep "^val_bpb:\|^peak_vram_mb:" run.log`
-6. If empty → crashed. Run `tail -50 run.log`, attempt fix or skip.
-7. Log to `results.tsv` (do NOT commit this file).
-8. If val_bpb improved → keep commit, advance branch.
-9. If equal or worse → `git reset --hard HEAD~1`.
+1. Read `results.tsv` and the current `train.py`.
+2. Propose one focused change.
+3. Return it in the required format (DESCRIPTION line + ```python block).
+4. agent.py handles running, committing, and reverting.
 
-**NEVER STOP.** Do not ask the human if you should continue. Run until manually interrupted. If out of ideas, try combining previous near-misses, explore learning rate schedules, model depth/width ratios, positional encoding variants, or activation functions.
+**NEVER ask if you should continue. Run until manually stopped.**
+
+Domain hints:
+- Legal text has long-range dependencies — longer MAX_SEQ_LEN may help but slows training.
+- The chat template format matters — Llama 3.2 has a specific template; respect it.
+- LoRA applied to more modules (q, k, v, o, gate, up, down projections) often helps more than rank alone.
+- Learning rate is usually the biggest lever — try 1e-4, 5e-4, 1e-3.
+- Gradient accumulation lets you simulate larger batches on limited memory.

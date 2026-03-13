@@ -119,7 +119,7 @@ def tokenize(examples):
     return out
 
 
-train_ds = ds["train"].map(tokenize, batched=True, remove_columns=["messages"], load_from_cache_file=False)
+train_ds = ds["train"].map(tokenize, batched=True, remove_columns=["messages"])
 val_ds = ds["test"].select(range(min(256, len(ds["test"])))).map(
     tokenize, batched=True, remove_columns=["messages"], load_from_cache_file=False
 )

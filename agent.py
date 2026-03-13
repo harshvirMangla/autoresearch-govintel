@@ -67,13 +67,13 @@ def log_agent_response(response, description, exp_num):
         f"timestamp: {datetime.now().isoformat()}\n\n"
         f"{response}\n"
     )
-    log(f"  agent response saved to {path.name}")
+    log(f"agent response saved to {path.name}")
 
 
 def log_training_output(output, commit, exp_num):
     path = LOGS_DIR / f"exp_{exp_num:03d}_{commit}_train.log"
     path.write_text(output)
-    log(f"  training output saved to {path.name}")
+    log(f"training output saved to {path.name}")
 
 
 def log_train_code(code, exp_num):
@@ -87,7 +87,7 @@ def sh(cmd):
 
 
 def run_training(exp_num):
-    log("  launching train.py ...")
+    log("launching train.py ...")
     t0 = time.time()
     r = subprocess.run(
         [sys.executable, "train.py"],
@@ -99,13 +99,13 @@ def run_training(exp_num):
     lines = output.strip().splitlines()
     step_lines = [l for l in lines if l.startswith("step ")]
     if step_lines:
-        log(f"  last step: {step_lines[-1].strip()}")
+        log(f"last step: {step_lines[-1].strip()}")
     summary_start = next((i for i, l in enumerate(lines) if l.strip() == "---"), None)
     if summary_start is not None:
         for l in lines[summary_start:]:
-            log(f"  {l}")
+            log(f"{l}")
 
-    log(f"  finished in {elapsed:.0f}s")
+    log(f"finished in {elapsed:.0f}s")
     return output
 
 
@@ -196,16 +196,16 @@ def ask_agent(client, program, train_code, results_text, error_context=""):
         {"role": "system", "content": program},
         {"role": "user", "content": prompt},
     ]
-    log("  calling Fireworks API ...")
+    log("calling Fireworks API ...")
     try:
         return call_api(client, messages)
     except Exception as e:
         err_str = str(e).lower()
         if any(x in err_str for x in ("credit", "billing", "quota", "payment", "402", "429")):
-            log(f"  API credits exhausted: {e}")
-            log("  shutting down, results saved to results.tsv and logs/")
+            log(f"API credits exhausted: {e}")
+            log("shutting down, results saved to results.tsv and logs/")
             sys.exit(0)
-        log(f"  API error: {e}, retrying in 15s ...")
+        log(f"API error: {e}, retrying in 15s ...")
         time.sleep(15)
         return call_api(client, messages)
 
@@ -217,7 +217,7 @@ def run_experiment(client, program, exp_num):
     try:
         response = ask_agent(client, program, orig_code, results_text)
     except Exception as e:
-        log(f"  API failed after retry: {e}, skipping")
+        log(f"API failed after retry: {e}, skipping")
         return None, None, None, None, None, "api failure"
 
     description = extract_description(response)
@@ -229,17 +229,17 @@ def run_experiment(client, program, exp_num):
         ok, err = validate_code(new_code)
         if ok:
             break
-        log(f"  validation failed: {err}, asking agent to fix (attempt {attempt + 1})")
+        log(f"validation failed: {err}, asking agent to fix (attempt {attempt + 1})")
         try:
             response = ask_agent(client, program, orig_code, results_text, error_context=err)
         except Exception as e:
-            log(f"  API failed during fix: {e}, skipping")
+            log(f"API failed during fix: {e}, skipping")
             return None, None, None, None, None, description
         description = extract_description(response)
         new_code = extract_code(response)
         log_agent_response(response, f"{description} [fix {attempt + 1}]", exp_num)
     else:
-        log("  could not get valid code after retries, skipping")
+        log("could not get valid code after retries, skipping")
         return None, None, None, None, None, description
 
     log_train_code(new_code, exp_num)
@@ -249,26 +249,26 @@ def run_experiment(client, program, exp_num):
     commit_msg = description[:72].replace("'", "").replace('"', "")
     sh(f"git add train.py && git commit -m '{commit_msg}'")
     commit = sh("git rev-parse --short HEAD")
-    log(f"  committed: {commit}")
+    log(f"committed: {commit}")
 
     try:
         output = run_training(exp_num)
     except subprocess.TimeoutExpired:
         output = ""
-        log("  training timed out")
+        log("training timed out")
 
     log_training_output(output, commit, exp_num)
     bpb, mem, steps, rank, coverage = parse_metrics(output)
 
     if bpb is None:
         error_tail = output[-3000:] if output else "(no output)"
-        log("  crashed, sending error to agent for fix ...")
-        log(f"  error tail:\n{error_tail}", also_print=False)
+        log("crashed, sending error to agent for fix ...")
+        log(f"error tail:\n{error_tail}", also_print=False)
 
         try:
             fix_response = ask_agent(client, program, new_code, results_text, error_context=error_tail)
         except Exception as e:
-            log(f"  API failed during crash fix: {e}")
+            log(f"API failed during crash fix: {e}")
             fix_response = None
 
         if fix_response:
@@ -291,7 +291,7 @@ def run_experiment(client, program, exp_num):
             record(commit, 0.0, 0.0, 0.0, "crash", description)
             sh("git reset --hard HEAD~1")
             shutil.copy(BACKUP_PY, TRAIN_PY)
-            log("  could not fix, reverted")
+            log("could not fix, reverted")
             return None, None, None, None, None, description
 
     return bpb, mem, steps, rank, coverage, description
@@ -339,24 +339,24 @@ def main():
         bpb, mem, steps, rank, coverage, description = run_experiment(client, program, exp_num)
 
         if bpb is None:
-            log("  skipped")
+            log("skipped")
             exp_num += 1
             continue
 
         commit = sh("git rev-parse --short HEAD")
-        log(f"  val_bpb={bpb:.6f} mem={mem:.1f}GB steps={steps} coverage={coverage:.1f}% rank={rank}")
-        log(f"  {description}")
+        log(f"val_bpb={bpb:.6f} mem={mem:.1f}GB steps={steps} coverage={coverage:.1f}% rank={rank}")
+        log(f"{description}")
 
         if bpb < best_bpb:
             record(commit, bpb, mem, coverage, "keep", description)
             improvement = best_bpb - bpb
             best_bpb = bpb
-            log(f"  improved by {improvement:.6f}, new best: {best_bpb:.6f}")
+            log(f"improved by {improvement:.6f}, new best: {best_bpb:.6f}")
         else:
             record(commit, bpb, mem, coverage, "discard", description)
             sh("git reset --hard HEAD~1")
             shutil.copy(BACKUP_PY, TRAIN_PY)
-            log("  no improvement, reverted")
+            log("no improvement, reverted")
 
         exp_num += 1
 

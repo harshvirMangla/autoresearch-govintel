@@ -1,9 +1,3 @@
-"""
-LoRA fine-tuning of Qwen2.5-1.5B-Instruct on GovIntel legal dataset.
-Autoresearch target: modify everything in this file to minimize val_bpb.
-Usage: python3 train.py
-"""
-
 import contextlib
 import gc
 import math
@@ -30,9 +24,8 @@ from datasets import load_dataset
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# hyperparameters - agent modifies these
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
-TIME_BUDGET = 300  # wall-clock training seconds
+TIME_BUDGET = 300
 SEED = 42
 
 LORA_RANK = 16
@@ -65,7 +58,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
 
-model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.bfloat16)
 model = get_peft_model(model, LoraConfig(
     task_type=TaskType.CAUSAL_LM,
     r=LORA_RANK, lora_alpha=LORA_ALPHA, lora_dropout=LORA_DROPOUT,
@@ -119,7 +112,7 @@ def tokenize(examples):
     return out
 
 
-train_ds = ds["train"].map(tokenize, batched=True, remove_columns=["messages"])
+train_ds = ds["train"].map(tokenize, batched=True, remove_columns=["messages"], load_from_cache_file=False)
 val_ds = ds["test"].select(range(min(256, len(ds["test"])))).map(
     tokenize, batched=True, remove_columns=["messages"], load_from_cache_file=False
 )
@@ -211,7 +204,6 @@ peak_mb = (
     torch.cuda.max_memory_allocated() / 1024 ** 2 if device_type == "cuda" else 0.0
 )
 
-# save adapter only if this is a new best
 best_file = Path("models/best_val_bpb.txt")
 prev_best = float(best_file.read_text()) if best_file.exists() else float("inf")
 if val_bpb < prev_best:
@@ -219,7 +211,7 @@ if val_bpb < prev_best:
     best_file.write_text(str(val_bpb))
     model.save_pretrained(Path("models/best"))
     tokenizer.save_pretrained(Path("models/best"))
-    print(f"new best adapter saved to models/best (val_bpb: {val_bpb:.6f})")
+    print(f"new best saved to models/best ({val_bpb:.6f})")
 
 examples_seen = step * BATCH_SIZE * GRAD_ACCUM
 coverage = 100 * examples_seen / max(len(train_ds), 1)

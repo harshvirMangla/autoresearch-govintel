@@ -1,44 +1,55 @@
-# autoresearch — GovIntel Legal LoRA Fine-tuning
+# GovIntel Legal Fine-tuning
 
-You are an autonomous ML researcher. Your job is to improve LoRA fine-tuning of Llama 3.2 1B on the GovIntel dataset — 14,280 Indian legal Q&A pairs covering IPC, BNS, BNSS, BSA, and temporal law application (before/after July 1 2024 cutoff determines which code applies).
+You are an autonomous ML researcher. Your goal is to get the lowest val_bpb by fine-tuning a language model on the GovIntel dataset: 14,280 Indian legal Q&A pairs covering IPC, BNS, BNSS, BSA, and temporal routing (pre/post July 1 2024 determines which criminal code applies).
 
-## The metric
+val_bpb = `val_loss / math.log(2)`. Lower is better. This is the only thing that matters.
 
-**val_bpb** is validation cross-entropy loss on held-out GovIntel Q&A. Lower is better. This is your only optimization target.
+## Baseline
+
+Qwen2.5-1.5B-Instruct, rank-16 LoRA on q_proj+v_proj: val_bpb = 2.057.
+Each run sees about 3.9% of training data (63 steps, effective batch 8, MAX_SEQ_LEN=512).
+Model load + tokenization takes roughly 100 seconds before training even starts.
+
+Beat 2.057. Below 1.8 is meaningful. Below 1.5 is excellent.
+
+## Coverage problem
+
+With the default config you see about 500 examples out of 12,859 per run. That is 3.9% - too noisy to measure real improvements. Fix this before anything else.
+
+The most direct fixes, from highest impact to lowest:
+- Switch to a smaller model so it loads faster and trains more steps. Only these three are pre-downloaded and available: `HuggingFaceTB/SmolLM2-135M-Instruct`, `HuggingFaceTB/SmolLM2-360M-Instruct`, `Qwen/Qwen2.5-1.5B-Instruct`. Use only these three.
+- Reduce MAX_SEQ_LEN to 256 or 128. Most answers are under 100 tokens. Most of the 512 length is wasted padding.
+- Pack multiple short examples end-to-end into one sequence instead of padding each to MAX_SEQ_LEN. This multiplies training throughput by 3-5x.
 
 ## The dataset
 
-Chat-format (system / user / assistant). Each example is a legal question with a structured legal answer. The temporal routing task is particularly hard — offense date determines whether IPC 1860 or BNS 2023 applies, with 2024 as the cutoff.
+Chat format: system / user / assistant. Questions are Indian criminal law Q&A.
+The key sub-task is temporal routing: given an offense date, decide whether IPC 1860 (before July 1 2024) or BNS 2023 (after) applies. The model needs to learn this date as a hard decision boundary.
+Most answers are short, under 100 tokens. Sequences are mostly padding at 512 length.
 
-## Setup
+## What you can change
 
-1. Branch: `autoresearch/govintel-legal`
-2. Read `train.py` (the only file you modify).
-3. Data downloads from HuggingFace automatically when train.py runs.
+Everything in train.py:
 
-## What you can modify
+- Base model - but only from the three listed above
+- LoRA config: rank, alpha, dropout, target modules (q/k/v/o/gate_proj/up_proj/down_proj)
+- Optimizer: AdamW, SGD, schedule-free
+- LR, scheduler (cosine with warmup works well), warmup steps
+- Batch size, gradient accumulation, sequence length, gradient clipping
+- Data format: message serialization, system prompt wording, truncation strategy
+- Data sampling: skip padding-heavy examples, oversample temporal routing examples
+- Loss function: assistant-only tokens (already done in baseline), label smoothing, weighted by answer length
+- Sequence packing to eliminate padding waste
 
-Everything in `train.py`. Including:
-- LoRA rank, alpha, dropout, which layers to apply LoRA to
-- Learning rate, weight decay, scheduler, warmup
-- Batch size, gradient accumulation, sequence length
-- Data formatting — how messages get serialized to text
-- Optimizer choice and configuration
-- Gradient clipping
-- Model architecture (must remain a HuggingFace model that auto-downloads)
+## Hard constraints
 
-## Available packages
+- Training must finish within TIME_BUDGET seconds (default 300)
+- Output must end with the exact summary block below - agent.py parses val_bpb from it
+- Do not modify the _load_env() function or the summary print block
+- Apple MPS only, no CUDA. Call `torch.mps.synchronize()` after each backward pass.
+- Only use packages from this list: `torch`, `transformers`, `peft`, `datasets`, `numpy`, `accelerate`, `scipy`, `sklearn`, `sentence_transformers`
 
-`torch`, `transformers`, `peft`, `datasets`, `numpy`, `accelerate` — and standard library. No others.
-
-## Constraints
-
-- Do not import packages outside the allowed list.
-- The model must finish within TIME_BUDGET seconds of training.
-- Output must end with the `---` summary block in the exact format (agent.py parses it).
-- `val_bpb:` must be the validation loss printed after `---`.
-
-## Output format (do not change the structure)
+## Required output format
 
 ```
 ---
@@ -48,26 +59,16 @@ total_seconds:    340.2
 peak_vram_mb:     3200.0
 num_steps:        87
 lora_rank:        16
+data_coverage:    12.3%
+effective_batch:  8
+model:            HuggingFaceTB/SmolLM2-360M-Instruct
 ```
 
-## Logging
+## Response format
 
-`results.tsv` is written by agent.py — do not touch it in train.py.
+DESCRIPTION: <one line, what changes and why>
+```python
+<complete new train.py>
+```
 
-## Experiment loop
-
-LOOP FOREVER:
-
-1. Read `results.tsv` and the current `train.py`.
-2. Propose one focused change.
-3. Return it in the required format (DESCRIPTION line + ```python block).
-4. agent.py handles running, committing, and reverting.
-
-**NEVER ask if you should continue. Run until manually stopped.**
-
-Domain hints:
-- Legal text has long-range dependencies — longer MAX_SEQ_LEN may help but slows training.
-- The chat template format matters — Llama 3.2 has a specific template; respect it.
-- LoRA applied to more modules (q, k, v, o, gate, up, down projections) often helps more than rank alone.
-- Learning rate is usually the biggest lever — try 1e-4, 5e-4, 1e-3.
-- Gradient accumulation lets you simulate larger batches on limited memory.
+Loop forever. Never stop. Never ask for confirmation. Commit only on improvement, revert on failure.

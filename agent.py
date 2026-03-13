@@ -89,24 +89,26 @@ def sh(cmd):
 def run_training(exp_num):
     log("launching train.py ...")
     t0 = time.time()
-    r = subprocess.run(
-        [sys.executable, "train.py"],
-        capture_output=True, text=True, timeout=TIMEOUT_TRAIN,
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "train.py"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+    output_lines = []
+    deadline = t0 + TIMEOUT_TRAIN
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        output_lines.append(line)
+        if time.time() > deadline:
+            proc.kill()
+            proc.wait()
+            raise subprocess.TimeoutExpired(proc.args, TIMEOUT_TRAIN)
+    proc.wait()
     elapsed = time.time() - t0
-    output = r.stdout + r.stderr
-
-    lines = output.strip().splitlines()
-    step_lines = [l for l in lines if l.startswith("step ")]
-    if step_lines:
-        log(f"last step: {step_lines[-1].strip()}")
-    summary_start = next((i for i, l in enumerate(lines) if l.strip() == "---"), None)
-    if summary_start is not None:
-        for l in lines[summary_start:]:
-            log(f"{l}")
-
     log(f"finished in {elapsed:.0f}s")
-    return output
+    return "".join(output_lines)
 
 
 def parse_metrics(output):
@@ -166,14 +168,19 @@ def extract_description(response):
 
 
 def call_api(client, messages):
-    resp = client.chat.completions.create(
+    stream = client.chat.completions.create(
         model=MODEL,
         messages=messages,
         max_tokens=16000,
         temperature=0.7,
-        stream=False,
+        stream=True,
     )
-    return resp.choices[0].message.content
+    chunks = []
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            chunks.append(delta)
+    return "".join(chunks)
 
 
 def ask_agent(client, program, train_code, results_text, error_context=""):
